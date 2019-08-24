@@ -1,0 +1,398 @@
+---
+title: "Membership Woes"
+author: "Pranay Kothari"
+date: "July 9, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+### CASE:
+A certain premium club boasts a large customer membership. The members pay an annual membership fee in return for using the exclusive facilities offered by this club. The fees are customized for every member's personal package.In the last few years, however, the club has been facing an issue with a lot of members cancelling their memberships. The club management plans to address this issue by proactively addressing customer grievances. They, however, do not have enough bandwidth to reach out to the entire customer base individually and are looking to see whether a statistical  approach can help them identify customers at risk. Can you help them ?
+
+### SOLUTION:
+
+We will be building a machine learning model to predict customers at risk. Looking at the data we have found the following:
+1. Annual fees has very high variation for different customers.
+2. Membership term years are generally long.
+3. There are 2 types of packages and 5 modes of payments. Single premium customers have never cancelled their membership.
+4. There a are more MALES who are members than FEMALES. Also, most members are married.
+
+#### Assumptions:
+
+1. Where marital status is missing, their status is 'other' than the given 4.
+2. Where gender is missing, their status is 'other' than M or F.
+3. Member annual income and Annual fees are independent of each other. The strange relation between the two suggests omitted variables.
+4. Where the occupation code is NA, they belong to the 7th occupation ('others').
+
+
+**Let's start...**
+
+
+### IMPORTING LIBRARIES
+
+First, we will import all the libraries that we will need on our way.
+```{r}
+library(xlsx)         #Import Excel file
+library(naniar)       #to visualize missing data
+library(lubridate)    #for dates
+library(ggplot2)      #Visualization
+library(ggthemes)     #Visualization
+library(scales)       #Visualization
+library(caTools)      #Train Test Split
+library(caret)        #Classification And REgression Training
+library(rpart)        #Decision Trees
+library(rpart.plot)   #Visualize decision tree
+library(randomForest) #Random Forest
+```
+
+### Exploratory Data Analysis, Feature Engineering and Feature Selection
+Import the Data into R.
+```{r}
+#Importing data into Dataset.
+#defining data types.
+df = read.xlsx('C:/Users/StarTrek/Desktop/DS/Membership woe/Assignment- Membership woes.xlsx', sheetName = 'Data', colClasses = c("character", "numeric", "numeric", "character", "character", "numeric", "character", "character", "numeric", "numeric", "character", "character", "character", "character", "character"))
+
+```
+
+Dimension of the dataset:
+```{r}
+dim(df)
+```
+
+Checking null values:
+```{r}
+any(df == '')
+any(df == 'NA')
+```
+
+Replacing string null values with R - NA :
+```{r}
+df[df == ''] = NA
+df[df == 'NA'] = NA
+```
+
+Preview of the dataset:
+```{r}
+head(df)
+```
+
+Summary - check statistics of the features:
+```{r}
+summary(df)
+```
+We have 5 numeric features. Some of these can be bucketted.
+There are 2 Date columns, but they need transformation.
+Three columns - "MEMBERSHIP_NUMBER", "AGENT_CODE" and "END_DATE  (YYYYMMDD)" which will not be contributing to prediction.
+Remaining features are categorical in nature.
+
+
+Structure - More about the values in each feature:
+```{r}
+str(df)
+```
+
+Features "MEMBERSHIP_NUMBER", "AGENT_CODE" and "END_DATE  (YYYYMMDD)" will
+not be contributing to the prediction. Therefore, removing these features . 
+```{r}
+cols = c("MEMBERSHIP_NUMBER", "AGENT_CODE" , "END_DATE...YYYYMMDD.")
+df = df[!(names(df) %in% cols)]
+```
+
+Visualizing missing columns:
+```{r}
+vis_miss(df)
+```
+
+
+Count of missing values in features with missing values:
+```{r}
+colSums(sapply(df,is.na))[colSums(sapply(df,is.na))>0]
+```
+Missing map did not shopw us about the NA's present under "MEMBER_OCCUPATION_CD". But the count above tells us that there are few NA's in "MEMBER_OCCUPATION_CD" as well.
+
+Replacing NA values in features, feature engineering date and converting categorical features in to factors:
+```{r}
+df$MEMBER_MARITAL_STATUS = as.character(df$MEMBER_MARITAL_STATUS)
+df$MEMBER_MARITAL_STATUS[is.na(df$MEMBER_MARITAL_STATUS)] = 'O'
+df$MEMBER_MARITAL_STATUS = factor(df$MEMBER_MARITAL_STATUS)
+
+df$MEMBER_GENDER = as.character(df$MEMBER_GENDER)
+df$MEMBER_GENDER[is.na(df$MEMBER_GENDER)] = 'O'
+df$MEMBER_GENDER = factor(df$MEMBER_GENDER)
+
+
+#Replacing NA's in "MEMBER_OCCUPATION_CD"" with a category
+df$MEMBER_OCCUPATION_CD = as.character(df$MEMBER_OCCUPATION_CD)
+df$MEMBER_OCCUPATION_CD[is.na(df$MEMBER_OCCUPATION_CD)] = '7'
+df$MEMBER_OCCUPATION_CD = factor(df$MEMBER_OCCUPATION_CD)
+
+
+#Converting the date columns in to "date" datatype and then creating 2 columns - Year and Month from this. We therefore, created categorical columns which will be better for prediction.
+df$START_DATE..YYYYMMDD. = as.Date(df$START_DATE..YYYYMMDD.,"%Y%m%d")
+df$START_YR = factor(year(df$START_DATE..YYYYMMDD.))
+df$START_MONTH = factor(month(df$START_DATE..YYYYMMDD.))
+df$START_DATE..YYYYMMDD. = NULL
+
+#NA in MEMBER_ANNUAL_INCOME
+df$MEMBER_ANNUAL_INCOME[is.na(df$MEMBER_ANNUAL_INCOME)] = median(df$MEMBER_ANNUAL_INCOME, na.rm = TRUE)
+
+
+df$PAYMENT_MODE = factor(df$PAYMENT_MODE)
+df$MEMBERSHIP_PACKAGE = factor(df$MEMBERSHIP_PACKAGE)
+df$MEMBERSHIP_STATUS  = factor(df$MEMBERSHIP_STATUS )
+```
+
+
+
+####Univariate Analysis
+
+**Numeric Features**
+```{r}
+par(mfrow=c(3,2))
+par(mar=c(2,2,2,2))
+boxplot(df$MEMBERSHIP_TERM_YEARS)
+boxplot(df$ANNUAL_FEES)
+boxplot(df$MEMBER_ANNUAL_INCOME)
+boxplot(df$MEMBER_AGE_AT_ISSUE)
+boxplot(df$ADDITIONAL_MEMBERS)
+```
+
+
+We observed that "ANNUAL_FEES" and " "MEMBER_ANNUAL_INCOME" statistically has outliers. However, Income is a factor which is known to have great variation. ANNUAL_FEES is also varying due to the fact mentioned in the case "The fees are customized for every member's personal package". Moreover, I had tried treating the outlier it did not give better result. **Therefore, we will not treat the outliers.**
+
+
+**Categorical Features**
+```{r}
+table(df$MEMBER_MARITAL_STATUS)
+table(df$MEMBER_GENDER)
+table(df$MEMBER_OCCUPATION_CD)
+table(df$MEMBERSHIP_PACKAGE)
+table(df$PAYMENT_MODE)
+table(df$MEMBERSHIP_STATUS)
+table(df$START_YR)
+table(df$START_MONTH)
+```
+
+Some features needs missing values treated. 
+
+
+Bucketting "MEMBERSHIP_TERM_YEARS" into 4 categories.
+```{r}
+df$MEMBERSHIP_TERM_YEARS[df$MEMBERSHIP_TERM_YEARS < 25] = "<25"
+df$MEMBERSHIP_TERM_YEARS[df$MEMBERSHIP_TERM_YEARS >= 25 & df$MEMBERSHIP_TERM_YEARS < 50] = "25-49"
+df$MEMBERSHIP_TERM_YEARS[df$MEMBERSHIP_TERM_YEARS >= 50 & df$MEMBERSHIP_TERM_YEARS < 75] = "50-74"
+df$MEMBERSHIP_TERM_YEARS[df$MEMBERSHIP_TERM_YEARS >= 75] = "75+"
+#following 3 will also be part of "75+"
+df$MEMBERSHIP_TERM_YEARS[df$MEMBERSHIP_TERM_YEARS == 100] = "75+"
+df$MEMBERSHIP_TERM_YEARS[df$MEMBERSHIP_TERM_YEARS == 101] = "75+"
+df$MEMBERSHIP_TERM_YEARS[df$MEMBERSHIP_TERM_YEARS == 102] = "75+"
+df$MEMBERSHIP_TERM_YEARS = factor(df$MEMBERSHIP_TERM_YEARS)
+```
+
+Bucketting "MEMBER_AGE_AT_ISSUE" into 4 categories.
+```{r}
+df$MEMBER_AGE_AT_ISSUE[df$MEMBER_AGE_AT_ISSUE < 25] = "<25"
+df$MEMBER_AGE_AT_ISSUE[df$MEMBER_AGE_AT_ISSUE >= 25 & df$MEMBER_AGE_AT_ISSUE < 50] = "25-49"
+df$MEMBER_AGE_AT_ISSUE[df$MEMBER_AGE_AT_ISSUE >= 50 & df$MEMBER_AGE_AT_ISSUE < 75] = "50-74"
+df$MEMBER_AGE_AT_ISSUE[df$MEMBER_AGE_AT_ISSUE >= 75] = "75+"
+df$MEMBER_AGE_AT_ISSUE = factor(df$MEMBER_AGE_AT_ISSUE)
+```
+
+
+
+####Bivariate Analysis
+
+```{r}
+par(mfrow=c(1,1))
+ggplot(df, aes(MEMBER_GENDER,MEMBERSHIP_STATUS))+ geom_jitter(color =  '#f59042', alpha = 0.3) + theme_tufte()
+plot(df$MEMBER_GENDER,df$MEMBERSHIP_STATUS)
+```
+
+
+Male, Female and 'O' seems to be proportionally contributing to cancellation. There are more males than Females.
+
+
+
+Visualizing categorical predictors against the Target.
+```{r}
+par(mfrow=c(4,3)) #subplots - 4 rows, 3 columns
+par(mar=c(2,2,2,2)) #Margins
+plot(df$MEMBERSHIP_TERM_YEARS,df$MEMBERSHIP_STATUS)
+plot(df$MEMBER_AGE_AT_ISSUE,df$MEMBERSHIP_STATUS)
+plot(df$MEMBER_MARITAL_STATUS,df$MEMBERSHIP_STATUS)
+plot(df$MEMBER_OCCUPATION_CD,df$MEMBERSHIP_STATUS)
+plot(df$MEMBERSHIP_PACKAGE,df$MEMBERSHIP_STATUS)
+plot(df$MEMBER_AGE_AT_ISSUE,df$MEMBERSHIP_STATUS)
+plot(factor(df$ADDITIONAL_MEMBERS),df$MEMBERSHIP_STATUS)
+plot(df$PAYMENT_MODE,df$MEMBERSHIP_STATUS)
+plot(df$START_YR,df$MEMBERSHIP_STATUS)
+plot(df$START_MONTH,df$MEMBERSHIP_STATUS)
+```
+
+These plots suggest that contribution of each feature is proportional towards "CANCELLATION" and "INFORCE".
+
+
+Visualizing Numerical predictors against the Target.
+```{r}
+par(mfrow=c(1,1))
+ggplot(df, aes(ANNUAL_FEES)) + geom_histogram(color = 'Black',  aes(fill =MEMBERSHIP_STATUS)) + theme_tufte() + scale_x_continuous(labels = comma)
+ggplot(df, aes(MEMBER_ANNUAL_INCOME)) + geom_histogram(color = 'Black',  aes(fill =MEMBERSHIP_STATUS)) + theme_tufte() + scale_x_continuous(labels = comma)
+
+```
+
+
+Again, ANNUAL_FEES isn't suggesting that it could a strong reason for "CANCELLATION".
+
+
+**From our exploratory data analysis, we found that there are 3 features that would not contribute to prediction so we removed those. There is no need for further FEATURE SELECTION as from our observation above suggests that remaining features are each contributing to predictions.**
+
+
+### Model Building
+
+Our primary task is to assist the club management in identifying members who could be at risk of cancelling membership. Apart, from recognizing potential threat we also need to inform the club about the areas that they should work on to retain the customer. Therefore, interpretability of the model is important. Keeping this thought in mind, we will evaluate three models that have good interpretibility:
+1. Logistic Regression
+2. Decision Trees.
+3. Random Forest.
+
+There are other ensemble techniques such as AdaBoos to Gradient Boosting which might give better prediction but we loose interpretibility.
+
+
+#### Training and Testing Model
+
+Divide Data into Train and Test
+```{r}
+sample = sample.split(df$ANNUAL_FEES, 0.8)
+train = subset(df, sample == TRUE)
+test = subset(df, sample == FALSE)
+```
+
+
+
+
+#### Logistic Regression
+
+**Building Model**
+```{r}
+set.seed(50)
+logistic_model <- train(form = MEMBERSHIP_STATUS ~ ., data=train, method="glm", metric="Accuracy", trControl=trainControl(method = "cv", number = 10))
+#Model Accuracy and more details:
+logistic_model
+```
+Training Accuracy after 10-Fold Cross Validation = 0.72.
+
+AIC and significant features:
+```{r}
+summary(logistic_model)
+```
+
+
+**Testing Model**
+```{r}
+#Predict
+pred = predict(logistic_model,test)
+
+#Confusion Matrix
+cm = table(test$MEMBERSHIP_STATUS,pred)
+cm
+#Calculate metrics
+Accuracy = (cm[1] + cm[4])/sum(cm)
+Precision = cm[4]/(cm[3] + cm[4])
+Recall = cm[4]/(cm[2] + cm[4])
+lg_stats = c('LG', round(Accuracy,2),round(Precision,2),round(Recall,2))  #Storing
+
+#Print
+cat("Accuracy is ", lg_stats[2])
+cat("Precision is ", lg_stats[3])
+cat("Recall is ", lg_stats[4])
+```
+Payment Mode - monthly, wuarterly and semi-annualy are significant. As inferred above, SINGLE-PREMIUM is not significant.
+Package type-B needs attention.
+members with occupation code = 2 are significant predictor.
+Membership term year beyond 75+ years and Annual fees are significant too.
+
+#### Decision Trees
+
+**Building Model**
+```{r}
+set.seed(50)
+tree_model <- train(form = MEMBERSHIP_STATUS ~ ., data=train, method="rpart", parms = list(split ="information"),metric="Accuracy", trControl=trainControl(method = "cv", number = 10))
+#Model Accuracy and more details:
+tree_model
+#plot
+prp(tree_model$finalModel, box.palette = "Reds", tweak = 1.2)
+```
+
+**Testing Model**
+```{r}
+#Predict
+pred = predict(tree_model,test)
+
+#Confusion Matrix
+cm = table(test$MEMBERSHIP_STATUS,pred)
+
+#Calculate metrics
+Accuracy = (cm[1] + cm[4])/sum(cm)
+Precision = cm[4]/(cm[3] + cm[4])
+Recall = cm[4]/(cm[2] + cm[4])
+tree_stats = c('TREE', round(Accuracy,2),round(Precision,2),round(Recall,2))  #Storing
+
+#Print
+cat("Accuracy is ", tree_stats[2])
+cat("Precision is ", tree_stats[3])
+cat("Recall is ", tree_stats[4])
+
+```
+
+#### Random Forest
+
+**Building Model**
+```{r}
+rf_model <- randomForest(form = MEMBERSHIP_STATUS ~ ., data=train, ntree=500)
+#Significant predictors
+importance(rf_model)
+```
+MEMBERSHIP_TERM_YEARS, ANNUAL_FEES, MEMBER_ANNUAL_INCOME, START_YR are significant features.
+
+**Testing Model**
+```{r}
+#Predict
+pred = predict(rf_model,test)
+
+#Confusion Matrix
+cm = table(test$MEMBERSHIP_STATUS,pred)
+cm
+#Calculate metrics
+Accuracy = (cm[1] + cm[4])/sum(cm)
+Precision = cm[4]/(cm[3] + cm[4])
+Recall = cm[4]/(cm[2] + cm[4])
+rf_stats = c('RF', round(Accuracy,2),round(Precision,2),round(Recall,2))  #Storing
+
+#Print
+cat("Accuracy is ", rf_stats[2])
+cat("Precision is ", rf_stats[3])
+cat("Recall is ", rf_stats[4])
+```
+
+
+### Finalizing and Saving model
+
+Accumulating Stats:
+```{r}
+df_stats = data.frame(lg_stats,tree_stats,rf_stats, row.names = c('Algorithm','Accuracy','Precision','Recall'))
+df_stats
+```
+
+The results of all Three models is almost similar. We will choose, logistic regression model based on better overall statistics and better interpretibility.
+
+```{r}
+saveRDS(logistic_model, file = "Membership_woes_model.rds")
+```
+
+### CONCLUSION:
+
+Members with payments mode MONTHLY, QUARTERLY and SEMI-ANNUALLY are at more risk to cancel. Also, members with occupation code 2 needs to be attended. Annual fees is another significant predictors.
+
+**This was the solution for the membership woes. Thank you.**
